@@ -22,6 +22,7 @@ export default async function RequestKindPage({ params }: { params: Promise<{ ki
 
   return (
     <ModulePage eyebrow="VIPS Request Form" title={config.formTitle} description={config.subtitle}>
+      {kind === "taxInvoice" && <Link href="/requests/erp-invoice" className="inline-flex min-h-11 items-center rounded-lg border border-[#cddcf1] bg-white px-4 text-sm font-bold text-[#1d50a2]">ERP 연동 요청 미리보기</Link>}
       <RequestKindForm kind={kind} />
       {kind === "taxInvoice" && (
         <script

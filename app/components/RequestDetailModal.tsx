@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useState } from "react";
-import { CalendarDays, Download, FileText, Paperclip, X } from "lucide-react";
+import { CalendarDays, Download, ExternalLink, FileText, Paperclip, X } from "lucide-react";
 import { updateRequest, type RequestItem, type RequestStatus } from "../services/requestStorage";
 
 const statusStyles: Record<RequestStatus, string> = {
@@ -10,6 +10,17 @@ const statusStyles: Record<RequestStatus, string> = {
   완료: "ops-status-info",
   반려: "border-[#fecaca] bg-[#fff1f2] text-[#dc2626]"
 };
+
+const externalSites = {
+  revisedTaxInvoice: {
+    label: "홈택스 바로가기",
+    url: "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&menuCd=H4600000000"
+  },
+  reverseIssueApproval: {
+    label: "스마트빌 바로가기",
+    url: "https://www2.smartbill.co.kr/xMain/mb/mb_login/login.aspx?SourcePage=/xDti/no_conf/my/com_list.aspx?"
+  }
+} as const;
 
 function DetailCell({ label, value, highlight }: { label: string; value?: string; highlight?: boolean }) {
   return (
@@ -56,6 +67,9 @@ export function RequestDetailModal({
   const attachmentFileNames = detailEntries.filter(([label]) => label.includes("첨부") || label.includes("업로드"));
   const erpEnabled = request.kind === "taxInvoice" || request.kind === "advancePayment";
   const erpTransmission = request.erpTransmission;
+  const externalSite = request.kind === "revisedTaxInvoice" || request.kind === "reverseIssueApproval"
+    ? externalSites[request.kind]
+    : null;
 
   const downloadRequestExcel = () => {
     const rows = [
@@ -247,6 +261,22 @@ export function RequestDetailModal({
 
             {canProcess && (
               <div className="mt-3 rounded-[18px] border border-[#d7e2f1] bg-[#f8fbff] p-4">
+                {externalSite && (
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[#dce6f3] pb-4">
+                    <p className="text-[13px] font-[850] text-[#10203f]">외부 업무</p>
+                    <a
+                      href={externalSite.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      referrerPolicy="no-referrer"
+                      title={`${externalSite.label} (새 탭)`}
+                      className="inline-flex min-h-10 max-w-full items-center gap-2 rounded-md border border-[#c9d9ee] bg-white px-4 py-2 text-[13px] font-[850] text-[#1D50A2] hover:bg-[#edf4ff] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D50A2]"
+                    >
+                      <ExternalLink size={16} className="shrink-0" aria-hidden="true" />
+                      <span>{externalSite.label}</span>
+                    </a>
+                  </div>
+                )}
                 <label className="block">
                   <span className="mb-2 block text-[12px] font-[850] text-[#31445e]">처리 메모 / 반려 사유</span>
                   <textarea

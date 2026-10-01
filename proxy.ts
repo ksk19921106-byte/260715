@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextRequest, NextResponse } from "next/server";
+import { mustChangePassword } from "./app/services/accountPolicy";
 
 function liveAuthEnabled() {
   return Boolean(
@@ -10,6 +11,9 @@ function liveAuthEnabled() {
 }
 
 export async function proxy(request: NextRequest) {
+  if (process.env.NEXT_PUBLIC_OPS_AUTH_MODE === "supabase" && !liveAuthEnabled()) {
+    return NextResponse.json({ message: "로그인 설정이 준비되지 않았습니다. 관리자에게 문의해주세요." }, { status: 503 });
+  }
   if (!liveAuthEnabled()) return NextResponse.next({ request });
 
   let response = NextResponse.next({ request });
@@ -46,10 +50,24 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
+  if (data.user && !isPublicPath) {
+    const { data: profile, error } = await supabase.from("portal_profiles")
+      .select("active").eq("email", (data.user.email || "").toLowerCase()).eq("active", true).maybeSingle();
+    if ((error || !profile) && pathname !== "/api/auth/logout") {
+      return NextResponse.json({ message: "등록된 활성 직원 계정이 아닙니다. 관리자에게 문의해주세요." }, { status: 403 });
+    }
+    const allowed = ["/account/password", "/api/auth/password", "/api/auth/logout"];
+    if (mustChangePassword(data.user.app_metadata) && !allowed.includes(pathname)) {
+      const result = pathname.startsWith("/api/")
+        ? NextResponse.json({ message: "초기 비밀번호를 먼저 변경해주세요.", code: "PASSWORD_CHANGE_REQUIRED" }, { status: 403 })
+        : NextResponse.redirect(new URL("/account/password?required=1", request.url));
+      response.cookies.getAll().forEach(cookie => result.cookies.set(cookie));
+      return result;
+    }
+  }
   return response;
 }
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico|assets/).*)"]
 };
-

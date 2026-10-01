@@ -118,3 +118,9 @@ export async function writeSharedCollection<T>(collection: string, data: T) {
 export function isSharedStorageConfigured() {
   return enabled();
 }
+
+export async function requestOpsProgress<T>(payload: Record<string, unknown>) {
+  const result = await postSharedStorage<T>(payload);
+  if (!result?.ok) throw new Error(result?.message || "공용 저장소에 연결하지 못했습니다.");
+  return result.data;
+}

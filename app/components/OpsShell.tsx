@@ -17,6 +17,8 @@ import {
   FileText,
   GraduationCap,
   Home,
+  Menu,
+  KeyRound,
   LogOut
 } from "lucide-react";
 
@@ -206,7 +208,6 @@ function countMonthEndBadge(selectedUser: ReturnType<typeof useSelectedUser>["se
     const scope = getOperationsScope(selectedUser);
     return (snapshot.issues ?? []).filter((issue) => {
       if (issue.status && issue.status !== "open") return false;
-      if (String(issue.memo ?? "").trim()) return false;
       if (!isVisibleMonthEndIssue(issue)) return false;
       if (selectedUser.role === "VIPS") return true;
       if (scope.canViewOperations) return isSalesNameInScope(issue.iSales || "", scope) || isSalesNameInScope(issue.fSales || "", scope);
@@ -217,18 +218,21 @@ function countMonthEndBadge(selectedUser: ReturnType<typeof useSelectedUser>["se
   }
 }
 
-export function OpsShell({ children }: { children: ReactNode }) {
+export function OpsShell({ children, compactMobile = false }: { children: ReactNode; compactMobile?: boolean }) {
   const pathname = usePathname();
   const { selectedUser, setSelectedUser, users, authMode, isAuthLoading } = useSelectedUser();
   const [monthEndBadge, setMonthEndBadge] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     const sync = () => setMonthEndBadge(countMonthEndBadge(selectedUser));
     sync();
     window.addEventListener("storage", sync);
+    window.addEventListener("month-end-review-changed", sync);
     window.addEventListener("icbanq:selected-user-change", sync);
     return () => {
       window.removeEventListener("storage", sync);
+      window.removeEventListener("month-end-review-changed", sync);
       window.removeEventListener("icbanq:selected-user-change", sync);
     };
   }, [selectedUser]);
@@ -251,10 +255,17 @@ export function OpsShell({ children }: { children: ReactNode }) {
 
   return (
     <main className="min-h-screen overflow-x-clip bg-[#eaf3ff] text-[#111827]">
-      <div className="grid min-h-screen grid-cols-[252px_minmax(0,1fr)]">
-        <aside className="sticky top-3 m-3 flex min-h-[calc(100vh-24px)] w-[228px] flex-col overflow-hidden rounded-[26px] bg-[#1D50A2] px-3.5 py-4 text-white shadow-[14px_0_34px_rgba(29,80,162,0.2)]">
-          <Logo />
-          <div className="mt-4">
+      <div className={compactMobile ? "grid min-h-screen grid-cols-1 content-start sm:grid-cols-[252px_minmax(0,1fr)]" : "grid min-h-screen grid-cols-[252px_minmax(0,1fr)]"}>
+        <aside className={`${compactMobile ? "relative w-auto min-h-0 self-start sm:sticky sm:w-[228px] sm:min-h-[calc(100vh-24px)]" : "sticky min-h-[calc(100vh-24px)] w-[228px]"} top-3 m-3 flex flex-col overflow-hidden rounded-[26px] bg-[#1D50A2] px-3.5 py-4 text-white shadow-[14px_0_34px_rgba(29,80,162,0.2)]`}>
+          <div className={compactMobile ? "flex items-center justify-between gap-3 sm:block" : ""}>
+            <Logo />
+            {compactMobile ? (
+              <button type="button" aria-label="메뉴" title="메뉴" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((value) => !value)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10 sm:hidden">
+                <Menu size={20} />
+              </button>
+            ) : null}
+          </div>
+          <div className={`mt-4 ${compactMobile && !mobileMenuOpen ? "hidden sm:block" : ""}`}>
             {authMode === "demo" ? (
               <TestUserSwitcher selectedUser={selectedUser} users={users} onChange={setSelectedUser} pathname={pathname} />
             ) : (
@@ -262,7 +273,7 @@ export function OpsShell({ children }: { children: ReactNode }) {
             )}
           </div>
 
-          <nav className="mt-5 space-y-1">
+          <nav className={`mt-5 space-y-1 ${compactMobile && !mobileMenuOpen ? "hidden sm:block" : ""}`}>
             {navItems.filter((item) =>
               item.roles.includes(selectedUser.role) &&
               (!item.adminOnly || selectedUser.role === "VIPS") &&
@@ -298,8 +309,9 @@ export function OpsShell({ children }: { children: ReactNode }) {
             })}
           </nav>
 
-          <div className="mt-auto space-y-3 pt-5">
+          <div className={`mt-auto space-y-3 pt-5 ${compactMobile && !mobileMenuOpen ? "hidden sm:block" : ""}`}>
             <SidebarChallengeCard />
+            {authMode !== "demo" && <Link href="/account/password" className="flex h-10 items-center gap-3 rounded-lg px-3 text-xs font-bold text-[#1d50a2] hover:bg-white"><KeyRound size={16} />비밀번호 변경</Link>}
             <button onClick={handleLogout} aria-label={authMode === "demo" ? "시연 모드" : "로그아웃"} className="flex h-[40px] w-full items-center gap-3 rounded-[12px] bg-white/10 px-3 text-[12px] font-[850] text-white/85 hover:bg-white/18 hover:text-white">
               <LogOut size={16} />
               {authMode === "demo" ? "시연 모드" : "로그아웃"}

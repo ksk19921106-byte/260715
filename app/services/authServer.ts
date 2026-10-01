@@ -5,6 +5,7 @@ import { createClient } from "../lib/supabase/server";
 import { isLiveAuthEnabled } from "./authMode";
 import type { PortalUser } from "./portalUsers";
 import { getOperationsScope, isSalesNameInScope } from "./organization";
+import { mustChangePassword } from "./accountPolicy";
 
 type PortalProfileRow = {
   email: string;
@@ -40,7 +41,7 @@ export async function getAuthenticatedPortalUser(): Promise<AuthenticatedPortalU
   const supabase = await createClient();
   const { data, error } = await supabase.auth.getUser();
   const authUser = data.user;
-  if (error || !authUser?.email) return null;
+  if (error || !authUser?.email || mustChangePassword(authUser.app_metadata)) return null;
 
   const { data: profile } = await supabase
     .from("portal_profiles")

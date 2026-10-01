@@ -28,6 +28,16 @@ export type ClosingIssue = {
   uploadedBy: string;
   status: "open" | "done" | "dismissed";
   memo?: string;
+  review?: {
+    state: "draft" | "pending" | "approved" | "rejected";
+    updatedAt: string;
+    submittedBy?: string;
+    submittedAt?: string;
+    reviewedBy?: string;
+    reviewedAt?: string;
+    reason?: string;
+    history: Array<{ action: "memo" | "submit" | "approve" | "reject"; actor: string; at: string; note: string }>;
+  };
   erpUrl?: string;
   trackingUrl?: string;
   orderUrl?: string;

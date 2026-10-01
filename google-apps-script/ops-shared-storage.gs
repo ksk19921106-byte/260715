@@ -48,6 +48,10 @@ function doPost(e) {
       return jsonOutput({ ok: false, message: "Unauthorized" });
     }
 
+    if (payload.action === "getOpsProgress" || payload.action === "saveOpsProgress") {
+      return jsonOutput(handleOpsProgress(payload));
+    }
+
     const collection = String(payload.collection || "").trim();
     if (!isAllowedCollection(collection)) {
       return jsonOutput({ ok: false, message: "Unknown collection" });
@@ -120,4 +124,40 @@ function writeCollection(collection, data) {
   }
 
   sheet.getRange(row, 2, 1, 2).setValues([[json, updatedAt]]);
+}
+
+function handleOpsProgress(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = spreadsheet.getSheetByName("OPS_PROGRESS");
+    if (!sheet) {
+      sheet = spreadsheet.insertSheet("OPS_PROGRESS");
+      sheet.appendRow(["key", "cycle", "date", "task", "subject", "status", "evidence", "updatedBy", "updatedAt"]);
+      sheet.setFrozenRows(1);
+    }
+    const rows = sheet.getDataRange().getValues();
+    if (payload.action === "getOpsProgress") {
+      const subjects = Array.isArray(payload.subjects) ? payload.subjects : [];
+      const records = rows.slice(1).filter(function(row) {
+        return String(row[1]) === payload.cycle && subjects.includes(String(row[4]));
+      }).map(function(row) {
+        return { cycle: String(row[1]), date: String(row[2]), task: String(row[3]), subject: String(row[4]), status: String(row[5]), evidence: JSON.parse(String(row[6]) || "[]"), updatedBy: String(row[7]), updatedAt: String(row[8]) };
+      });
+      return { ok: true, data: records };
+    }
+    const record = payload.record;
+    if (!record || !/^\d{4}-\d{2}-\d{2}$/.test(record.date) || !Array.isArray(record.evidence) || !["complete", "in_progress", "incomplete", "auto"].includes(record.status)) throw new Error("Invalid progress record");
+    const key = [record.cycle, record.date, record.task, record.subject].join("|");
+    const evidence = JSON.stringify(record.evidence);
+    if (evidence.length > 45000) throw new Error("Progress evidence is too large");
+    const values = [key, record.cycle, record.date, record.task, record.subject, record.status, evidence, record.updatedBy, record.updatedAt];
+    const existing = rows.findIndex(function(row) { return String(row[0]) === key; });
+    const rowIndex = existing < 0 ? sheet.getLastRow() + 1 : existing + 1;
+    sheet.getRange(rowIndex, 1, 1, values.length).setNumberFormat("@").setValues([values]);
+    return { ok: true, data: record };
+  } finally {
+    lock.releaseLock();
+  }
 }

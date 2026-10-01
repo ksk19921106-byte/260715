@@ -1,9 +1,10 @@
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "../../lib/supabase/server";
+import { safeAccountNext } from "../../services/accountPolicy";
 
 function safeNext(value: string | null) {
-  return value?.startsWith("/") && !value.startsWith("//") ? value : "/";
+  return safeAccountNext(value);
 }
 
 export async function GET(request: NextRequest) {
@@ -32,4 +33,3 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.redirect(new URL(next, request.url));
 }
-

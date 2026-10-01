@@ -5,11 +5,22 @@ import type { ClosingIssue, ClosingIssueType, ClosingSnapshot } from "../../serv
 import { isSharedStorageConfigured, readSharedCollection, writeSharedCollection } from "../../services/sharedStorageServer";
 import { isLiveAuthEnabled } from "../../services/authMode";
 import { canViewSalesName, forbidden, getAuthenticatedPortalUser, isVipsUser, unauthorized } from "../../services/authServer";
-import type { PortalUser } from "../../services/portalUsers";
+import { PORTAL_USERS, type PortalUser } from "../../services/portalUsers";
+import { canReviewMonthEnd, ownsMonthEndIssue, reviewVersion, transitionMonthEndReview, type ReviewAction } from "../../services/monthEndReview";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const maxDuration = 60;
+
+// Serialize read/modify/write within this server process so parallel row edits
+// do not replace one another's snapshot. Stale row versions are rejected below.
+let mutationQueue: Promise<unknown> = Promise.resolve();
+function serializeMutation(action: () => Promise<NextResponse>) {
+  const result = mutationQueue.then(action, action);
+  mutationQueue = result.catch(() => undefined);
+  return result;
+}
 
 const snapshotPath = path.join(process.cwd(), "data", "month-end-snapshot.json");
 const historyPath = path.join(process.cwd(), "data", "month-end-snapshots.json");
@@ -47,6 +58,7 @@ type CompactClosingIssue = {
   td?: number;
   st?: ClosingIssue["status"];
   m?: string;
+  rv?: ClosingIssue["review"];
   e?: string;
   tr?: string;
   o?: string;
@@ -149,6 +161,7 @@ function compactSnapshot(snapshot: ClosingSnapshot): CompactClosingSnapshot {
       td: issue.taxIssueDays,
       st: issue.status,
       m: issue.memo,
+      rv: issue.review,
       e: issue.erpUrl,
       tr: issue.trackingUrl,
       o: issue.orderUrl
@@ -196,6 +209,7 @@ function hydrateSnapshot(value: unknown): ClosingSnapshot | null {
         uploadedBy,
         status: issue.st || "open",
         memo: issue.m,
+        review: issue.rv,
         erpUrl: issue.e,
         trackingUrl: issue.tr,
         orderUrl: issue.o
@@ -260,9 +274,10 @@ async function writeChunkedSharedCollection<T>(collection: string, data: T) {
   } satisfies ChunkedSharedCollection);
 }
 
-async function readSnapshotFile() {
+async function readSnapshotFile(requireShared = false) {
   const sharedSnapshot = hydrateSnapshot(await readChunkedSharedCollection<ClosingSnapshot | CompactClosingSnapshot>("monthEndSnapshot"));
   if (sharedSnapshot) return sharedSnapshot;
+  if (requireShared && isSharedStorageConfigured()) return null;
 
   try {
     const raw = await readFile(snapshotPath, "utf8");
@@ -350,7 +365,8 @@ async function readHomeSummary() {
 
 async function writeHomeSummary(snapshot: ClosingSnapshot) {
   const summary = buildHomeSummary(snapshot);
-  await writeSharedCollection("monthEndHomeSummary", summary);
+  const saved = await writeSharedCollection("monthEndHomeSummary", summary);
+  if (isSharedStorageConfigured() && !saved) throw new Error("Home summary save failed");
   return summary;
 }
 
@@ -411,37 +427,63 @@ export async function GET(request: NextRequest) {
   });
 }
 
-export async function POST(request: NextRequest) {
-  const authUser = await getAuthenticatedPortalUser();
-  if (isLiveAuthEnabled() && !authUser) return unauthorized();
+export function POST(request: NextRequest) {
+  return serializeMutation(() => importSnapshot(request));
+}
+
+async function importSnapshot(request: NextRequest) {
+  const authUser = await mutationViewer(request);
+  if (!authUser) return unauthorized();
+  if (!canReviewMonthEnd(authUser)) return forbidden("월마감 업로드는 VIPS팀만 할 수 있습니다. 사유 입력과 완료 요청은 개별 처리 기능을 이용해주세요.");
   const snapshot = await request.json();
 
   if (!isValidSnapshot(snapshot)) {
     return NextResponse.json({ message: "Invalid month-end snapshot" }, { status: 400 });
   }
 
-  let snapshotToSave = snapshot;
-  if (authUser && !isVipsUser(authUser)) {
-    const current = await readSnapshotFile();
-    if (!current || current.id !== snapshot.id) {
-      return forbidden("VIPS가 저장한 최신 월마감 데이터에서만 사유를 변경할 수 있습니다.");
-    }
+  const current = await readSnapshotFile(true);
+  const existing = new Map(current?.id === snapshot.id ? current.issues.map((issue) => [issue.id, issue]) : []);
+  const snapshotToSave: ClosingSnapshot = { ...snapshot, issues: snapshot.issues.map((issue) => {
+    const previous = existing.get(issue.id);
+    return { ...issue, status: previous?.status || "open", memo: previous?.memo || issue.memo, review: previous?.review };
+  }) };
+  return persistSnapshot(snapshotToSave, authUser);
+}
 
-    const incomingById = new Map(snapshot.issues.map((issue) => [issue.id, issue]));
-    snapshotToSave = {
-      ...current,
-      issues: current.issues.map((issue) => {
-        const canEdit = canViewSalesName(authUser, issue.iSales) || canViewSalesName(authUser, issue.fSales);
-        const incoming = incomingById.get(issue.id);
-        if (!canEdit || !incoming) return issue;
-        return {
-          ...issue,
-          memo: incoming.memo,
-          status: incoming.status
-        };
-      })
-    };
+async function mutationViewer(request: NextRequest) {
+  const user = await getAuthenticatedPortalUser();
+  if (isLiveAuthEnabled()) return user;
+  return PORTAL_USERS.find((person) => person.name === request.nextUrl.searchParams.get("viewer")) || null;
+}
+
+export function PATCH(request: NextRequest) {
+  return serializeMutation(() => updateReview(request));
+}
+
+async function updateReview(request: NextRequest) {
+  const user = await mutationViewer(request);
+  if (!user) return unauthorized();
+  const body = await request.json().catch(() => null);
+  if (!body || !["memo", "submit", "approve", "reject"].includes(body.action) || typeof body.snapshotId !== "string" || typeof body.issueId !== "string" || typeof body.version !== "string" || typeof body.note !== "string" || body.note.length > 4000) {
+    return NextResponse.json({ message: "변경 내용이 올바르지 않습니다." }, { status: 400 });
   }
+  const current = await readSnapshotFile(true);
+  if (!current) return NextResponse.json({ message: "최신 월마감 원본을 읽지 못했습니다. 저장소 연결을 확인해주세요." }, { status: 503 });
+  if (current.id !== body.snapshotId) return NextResponse.json({ message: "월마감 원본이 변경되었습니다. 새로고침 후 다시 확인해주세요." }, { status: 409 });
+  const issue = current.issues.find((item) => item.id === body.issueId);
+  if (!issue) return NextResponse.json({ message: "해당 월마감 거래를 찾지 못했습니다." }, { status: 404 });
+  if (!canReviewMonthEnd(user) && (!ownsMonthEndIssue(issue, user) || ["approve", "reject"].includes(body.action))) return forbidden("본인 건의 사유 입력·완료 요청만 가능합니다. 승인·반려는 VIPS팀 권한입니다.");
+  if (reviewVersion(issue) !== body.version) return NextResponse.json({ message: "다른 사용자가 이 건을 변경했습니다. 새로고침 후 다시 확인해주세요." }, { status: 409 });
+  try {
+    const updated = transitionMonthEndReview(issue, user, body.action as ReviewAction, body.note, new Date().toISOString());
+    return await persistSnapshot({ ...current, issues: current.issues.map((item) => item.id === issue.id ? updated : item) }, user);
+  } catch (error) {
+    return NextResponse.json({ message: error instanceof Error ? error.message : "처리하지 못했습니다." }, { status: 400 });
+  }
+}
+
+async function persistSnapshot(snapshotToSave: ClosingSnapshot, authUser: PortalUser) {
+  if (process.env.VERCEL && !isSharedStorageConfigured()) return NextResponse.json({ message: "공용 저장소 URL을 설정해주세요." }, { status: 503 });
 
   const sharedSaved = await writeChunkedSharedCollection("monthEndSnapshot", compactSnapshot(snapshotToSave));
   if (isSharedStorageConfigured() && !sharedSaved) {
@@ -464,13 +506,17 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  await writeHomeSummary(snapshotToSave);
+  try {
+    await writeHomeSummary(snapshotToSave);
+  } catch {
+    return NextResponse.json({ message: "월마감 원본은 저장되었지만 HOME 요약 갱신에 실패했습니다. 새로고침 후 반영 상태를 확인해주세요." }, { status: 502 });
+  }
 
   try {
     await mkdir(path.dirname(snapshotPath), { recursive: true });
     await writeFile(snapshotPath, JSON.stringify(snapshotToSave, null, 2), "utf8");
   } catch {
-    // Vercel file system is not persistent. Shared storage is used when configured.
+    if (!isSharedStorageConfigured()) return NextResponse.json({ message: "월마감 데이터를 저장하지 못했습니다." }, { status: 503 });
   }
 
   return NextResponse.json({ ok: true, snapshot: scopeSnapshot(snapshotToSave, authUser) });

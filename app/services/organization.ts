@@ -177,7 +177,7 @@ export function monthEndCompletion(issues: Array<{ memo?: string; status?: strin
   const activeIssues = issues.filter((issue) => issue.status !== "done" && issue.status !== "dismissed");
   const missingReasonCount = activeIssues.filter((issue) => !String(issue.memo ?? "").trim()).length;
   return {
-    complete: activeIssues.length === 0 || missingReasonCount === 0,
+    complete: activeIssues.length === 0,
     issueCount: activeIssues.length,
     missingReasonCount
   };

@@ -236,3 +236,12 @@ export function getLocalDateKey(date = new Date()) {
   const day = String(dayNumber).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
+
+export function getScheduledTrackingActions(date = new Date()) {
+  return ACTION_RULES.filter((rule) => rule.when(date)).map((rule) => ({
+    id: rule.id,
+    title: rule.actionTitle,
+    scheduleLabel: rule.scheduleLabel,
+    audience: rule.audience === "sales" ? "sales" as const : "vips" as const
+  }));
+}

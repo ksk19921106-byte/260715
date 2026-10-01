@@ -5,16 +5,18 @@ export function ModulePage({
   eyebrow,
   title,
   description,
+  compactMobile = false,
   children
 }: {
   eyebrow: string;
   title: string;
   description: string;
+  compactMobile?: boolean;
   children?: ReactNode;
 }) {
   return (
-    <OpsShell>
-      <section className="min-w-0 px-8 py-7">
+    <OpsShell compactMobile={compactMobile}>
+      <section className={compactMobile ? "min-w-0 px-3 py-5 sm:px-8 sm:py-7" : "min-w-0 px-8 py-7"}>
         <div className="mx-auto min-w-0 max-w-[1540px]">
           <div className="mb-5 flex min-h-[76px] items-center justify-between gap-4">
             <div className="min-w-0">

@@ -1,0 +1,17 @@
+node_modules/
+.next/
+.npm-cache/
+.vercel/
+.env*
+!.env.example
+*.log
+*.tsbuildinfo
+*.zip
+data/*
+!data/trade-close-records.json
+!data/*-template.csv
+docs/erp-screen-plan/assets/
+docs/erp-screen-plan/generated/
+docs/erp-screen-plan/icbanq-erp-screen-plan.html
+tmp*/
+playwright-*/

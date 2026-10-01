@@ -13,6 +13,8 @@ import {
   type ClosingSnapshot
 } from "../services/closingPasteParser";
 import { saveMonthEndActionRequest } from "../services/monthEndActionStorage";
+import { MonthEndReviewControls } from "../components/MonthEndReviewControls";
+import { canReviewMonthEnd, ownsMonthEndIssue, saveMonthEndReview } from "../services/monthEndReview";
 import { fetchMonthEndRmaSnapshot, uploadMonthEndRmaFile, type MonthEndRmaRecord, type MonthEndRmaSnapshot } from "../services/monthEndRma";
 
 type FilterKey = "all" | "mine" | ClosingIssueType | "rma";
@@ -101,8 +103,8 @@ async function readServerSnapshot() {
   }
 }
 
-async function writeServerSnapshot(snapshot: ClosingSnapshot) {
-  const response = await fetch("/api/month-end-snapshot", {
+async function writeServerSnapshot(snapshot: ClosingSnapshot, viewer: string) {
+  const response = await fetch(`/api/month-end-snapshot?viewer=${encodeURIComponent(viewer)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(snapshot)
@@ -281,6 +283,9 @@ export function MonthEndPasteClient() {
   const [rmaMessage, setRmaMessage] = useState("RMA 파일을 업로드하면 Sales별 조회 리스트가 생성됩니다.");
   const [rmaMessageType, setRmaMessageType] = useState<"info" | "success" | "error">("info");
   const [rmaUploading, setRmaUploading] = useState(false);
+  const [issueSaving, setIssueSaving] = useState(false);
+  const [issueSaveError, setIssueSaveError] = useState("");
+  const snapshotIssueIds = useMemo(() => new Set(snapshot?.issues.map((issue) => issue.id) || []), [snapshot]);
 
   useEffect(() => {
     let alive = true;
@@ -323,7 +328,7 @@ export function MonthEndPasteClient() {
     return () => {
       alive = false;
     };
-  }, [isAdmin]);
+  }, [isAdmin, selectedUser.name]);
 
   const allIssuesRaw = isAdmin ? recognizedIssues.length > 0 ? recognizedIssues : snapshot?.issues ?? [] : snapshot?.issues ?? [];
   const allIssues = allIssuesRaw.filter((issue) => isVisibleMonthEndIssue(issue) && hasPortalAccount(issue));
@@ -460,7 +465,7 @@ export function MonthEndPasteClient() {
     setSnapshot(nextSnapshot);
 
     try {
-      await writeServerSnapshot(nextSnapshot);
+      await writeServerSnapshot(nextSnapshot, selectedUser.name);
       setMonthFilter(uploadMonth);
       setRecognizedIssues(issuesForSelectedMonth);
       setMessage(`저장 완료: ${formatMonthLabel(uploadMonth)} 월마감 이슈 ${issuesForSelectedMonth.length}건이 영업별로 배포되었습니다.`);
@@ -507,26 +512,25 @@ export function MonthEndPasteClient() {
     }
   };
 
-  const persistIssueUpdate = (updater: (target: ClosingIssue) => ClosingIssue) => {
-    setRecognizedIssues((prev) => prev.map(updater));
-    setSnapshot((prev) => {
-      if (!prev) return prev;
-      const next = { ...prev, issues: prev.issues.map(updater) };
-      writeSnapshot(next);
-      writeServerSnapshot(next).catch(() => undefined);
-      return next;
-    });
+  const acceptSavedSnapshot = (next: ClosingSnapshot) => {
+    setSnapshot(next);
+    setRecognizedIssues((previous) => previous.length ? next.issues : previous);
+  };
+
+  const persistIssueMemo = async (issue: ClosingIssue, memo: string) => {
+    if (!snapshot || !snapshotIssueIds.has(issue.id)) { setIssueSaveError("월마감 원본을 먼저 저장해주세요."); return false; }
+    setIssueSaving(true); setIssueSaveError("");
+    try {
+      acceptSavedSnapshot(await saveMonthEndReview(snapshot.id, issue, selectedUser.name, "memo", memo));
+      return true;
+    } catch (error) { setIssueSaveError(error instanceof Error ? error.message : "사유를 저장하지 못했습니다."); return false; }
+    finally { setIssueSaving(false); }
   };
 
   const saveIssueMemo = (issue: ClosingIssue) => {
     const memo = window.prompt(issueMemoPrompt(issue.issueType), issue.memo || "");
     if (memo === null) return;
-    persistIssueUpdate((target) => target.id === issue.id ? { ...target, memo } : target);
-  };
-
-  const updateIssueStatus = (issue: ClosingIssue, status: ClosingIssue["status"]) => {
-    const memo = status === "open" ? issue.memo : window.prompt(status === "done" ? "확인 완료 메모를 입력해주세요." : "제외 사유를 입력해주세요.", issue.memo || "") ?? "";
-    persistIssueUpdate((target) => target.id === issue.id ? { ...target, status, memo } : target);
+    void persistIssueMemo(issue, memo);
   };
 
   const handleIssueAction = (issue: ClosingIssue) => {
@@ -548,15 +552,16 @@ export function MonthEndPasteClient() {
 
   return (
     <div className="space-y-5">
+      {issueSaveError ? <p role="alert" className="border border-red-200 bg-red-50 p-3 text-[13px] text-red-700">{issueSaveError}</p> : null}
       <ArrangeModal
         issue={arrangeIssue}
         memo={arrangeMemo}
         onMemoChange={setArrangeMemo}
         onClose={() => setArrangeIssue(null)}
-        onConfirm={(issue) => {
+        onConfirm={async (issue) => {
           const memo = arrangeMemo || "출고 진행 확인";
+          if (!await persistIssueMemo(issue, memo)) return;
           saveMonthEndActionRequest({ issue, memo, requestedBy: selectedUser.name });
-          persistIssueUpdate((target) => target.id === issue.id ? { ...target, memo } : target);
           setArrangeIssue(null);
           window.alert("출고진행 요청이 VIPS 운영 화면에 임시 저장되었습니다. 추후 ERP API 연동 시 이 동작이 ERP 출고요청으로 연결됩니다.");
         }}
@@ -866,8 +871,8 @@ export function MonthEndPasteClient() {
               </div>
             </div>
           ) : (
-          <div className="mt-4 overflow-x-auto rounded-[18px] border border-[#e7ecf4]">
-            <div className="grid min-w-[1280px] grid-cols-[110px_170px_minmax(210px,1fr)_120px_120px_80px_100px_minmax(230px,1.1fr)_150px_96px] gap-2 bg-[#f8fbff] px-4 py-3 text-[11px] font-[950] text-[#64748b]">
+          <div className="mt-4 max-h-[580px] overflow-auto rounded-[18px] border border-[#e7ecf4]">
+            <div className="sticky top-0 z-10 grid min-w-[1490px] grid-cols-[110px_170px_minmax(210px,1fr)_120px_120px_80px_100px_minmax(230px,1.1fr)_150px_96px] gap-2 bg-[#f8fbff] px-4 py-3 text-[11px] font-[950] text-[#64748b]">
               <span>ISales</span>
               <span>상태</span>
               <span>거래처(Company)</span>
@@ -875,18 +880,18 @@ export function MonthEndPasteClient() {
               <span>GPD</span>
               <span>GP</span>
               <span>미출고기간</span>
-              <span>사유입력칸</span>
+              <span>사유 / 완료 검토</span>
               <span>액션</span>
               <span>바로가기</span>
             </div>
-            <div className="max-h-[520px] overflow-auto">
+            <div>
               {filteredIssues.length === 0 ? (
                 <p className="p-6 text-center text-[13px] font-[850] text-[#64748b]">조건에 맞는 이슈가 없습니다.</p>
               ) : (
                 filteredIssues.map((issue) => (
                   <div
                     key={issue.id}
-                    className={`grid min-w-[1280px] grid-cols-[110px_170px_minmax(210px,1fr)_120px_120px_80px_100px_minmax(230px,1.1fr)_150px_96px] items-center gap-2 border-t border-[#eef2f7] px-4 py-3 text-[12px] ${
+                    className={`grid min-w-[1490px] grid-cols-[110px_170px_minmax(210px,1fr)_120px_120px_80px_100px_minmax(230px,1.1fr)_150px_96px] items-center gap-2 border-t border-[#eef2f7] px-4 py-3 text-[12px] ${
                       issue.status !== "open" ? "bg-[#f8fafc] opacity-60" : "bg-white"
                     }`}
                   >
@@ -901,22 +906,22 @@ export function MonthEndPasteClient() {
                     <span className="font-[850] text-[#64748b]">
                       {issue.issueType === "invoice_required" ? "-" : `${issue.shipmentDays ?? getElapsedDays(issue)}일`}
                     </span>
-                    <button
+                    <div className="min-w-0 space-y-2"><button
                       type="button"
                       onClick={() => saveIssueMemo(issue)}
-                      className={`min-w-0 rounded-[12px] border px-3 py-2 text-left text-[12px] font-[800] transition hover:border-[#1D50A2] hover:bg-[#f8fbff] ${
+                      disabled={issueSaving || issue.status !== "open" || (!canReviewMonthEnd(selectedUser) && !ownsMonthEndIssue(issue, selectedUser))}
+                      className={`w-full min-w-0 rounded-[12px] border px-3 py-2 text-left text-[12px] font-[800] transition hover:border-[#1D50A2] hover:bg-[#f8fbff] ${
                         issue.memo ? "border-[#dce6f3] bg-white text-[#334155]" : "border-dashed border-[#cbd5e1] bg-[#fbfdff] text-[#94a3b8]"
                       }`}
                       title={issue.memo || "Sales가 직접 사유를 입력합니다."}
                     >
                       <span className="block truncate">{issue.memo || "사유 입력/수정"}</span>
                     </button>
+                    {snapshot && snapshotIssueIds.has(issue.id) ? <MonthEndReviewControls snapshotId={snapshot.id} issue={issue} user={selectedUser} onSaved={acceptSavedSnapshot} disabled={issueSaving} /> : null}
+                    </div>
                     <span className="flex gap-1.5">
-                      <button type="button" onClick={() => handleIssueAction(issue)} className="ops-btn-primary h-8 px-3 text-[11px]">
+                      <button type="button" disabled={issueSaving || issue.status !== "open" || (!canReviewMonthEnd(selectedUser) && !ownsMonthEndIssue(issue, selectedUser))} onClick={() => handleIssueAction(issue)} className="ops-btn-primary h-8 px-3 text-[11px]">
                         {issueActionLabel(issue.issueType)}
-                      </button>
-                      <button type="button" onClick={() => updateIssueStatus(issue, "done")} title="확인 완료" className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#edf4ff] text-[#1D50A2]">
-                        <CheckCircle2 size={15} />
                       </button>
                     </span>
                     <ErpShortcutButton url={getMonthEndErpUrl(issue)} />

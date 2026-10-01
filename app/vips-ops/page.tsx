@@ -17,6 +17,8 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { AccessDenied } from "../components/AccessDenied";
+import { OpsProgressPanel } from "../components/OpsProgressPanel";
+import { MonthEndReviewQueue } from "../components/MonthEndReviewQueue";
 import { ModulePage } from "@/app/components/ModulePage";
 import { TEST_USERS, useSelectedUser } from "../hooks/useSelectedUser";
 import {
@@ -1066,7 +1068,7 @@ function TeamControlCard({ team }: { team: TeamOpsMetric }) {
           <p className="mt-1 truncate text-[11px] font-[750] text-[#94a3b8]">요청현황에서 팀 필터 적용</p>
         </button>
       </div>
-      <p className="mt-3 text-[11px] font-[750] text-[#94a3b8]">완료 기준: 대상 없음 또는 모든 월마감 이슈에 사유 입력 완료</p>
+      <p className="mt-3 text-[11px] font-[750] text-[#94a3b8]">완료 기준: 대상 없음 또는 VIPS 완료 승인. 사유 입력·검토 대기는 미완료에 포함됩니다.</p>
     </article>
   );
 }
@@ -1144,8 +1146,8 @@ function SalesStatusTable({ rows }: { rows: SalesOpsMetric[] }) {
                       <p className={`text-[12px] font-[950] ${row.monthEndComplete ? "text-[#15803d]" : "text-[#dc2626]"}`}>{row.monthEndComplete ? "완료" : "미완료"}</p>
                       <p className="mt-0.5 truncate text-[11px] font-[750] text-[#64748b]">
                         {row.monthEndComplete
-                          ? row.monthEndCount === 0 ? "대상 없음" : "사유 입력 완료"
-                          : `사유 미입력 ${row.missingReasonCount}건`}
+                          ? row.monthEndCount === 0 ? "남은 대상 없음" : "VIPS 승인 완료"
+                          : `VIPS 승인 필요 · 사유 미입력 ${row.missingReasonCount}건`}
                       </p>
                     </div>
                   </div>
@@ -2038,6 +2040,11 @@ export function OperationsDashboard({ mode = "vips" }: { mode?: "vips" | "sales"
 
         {activeTab === "monthEnd" ? (
           <div className="space-y-4">
+            <OpsProgressPanel />
+            <MonthEndReviewQueue snapshot={closingSnapshot} user={selectedUser} onSaved={(next) => {
+              setClosingSnapshot(next);
+              setClosingSnapshots((previous) => [next, ...previous.filter((item) => item.id !== next.id)]);
+            }} />
             <MonthEndOpsSummary cards={monthEndOpsCards} onSelect={setSelectedMonthEndCard} />
             <MonthEndActionQueue
               issues={closingIssues}
